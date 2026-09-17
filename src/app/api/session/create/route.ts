@@ -10,21 +10,26 @@ export async function POST(_req: NextRequest) {
 
   let sessionCode = '';
   let attempts = 0;
+  let created = false;
 
   // Retry on collision (extremely rare)
   while (attempts < 5) {
-    sessionCode = generateSessionCode();
+    const code = generateSessionCode();
     const { error } = await db.from('sessions').insert({
-      session_code: sessionCode,
+      session_code: code,
       partner_a_id: partnerAId,
       status: 'waiting',
       round: 1,
     });
-    if (!error) break;
+    if (!error) {
+      sessionCode = code;
+      created = true;
+      break;
+    }
     attempts++;
   }
 
-  if (!sessionCode) {
+  if (!created) {
     return NextResponse.json({ error: 'Failed to create session' }, { status: 500 });
   }
 
