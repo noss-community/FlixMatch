@@ -1,7 +1,12 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { ClaudeSearchBrief, PartnerPreferences, Title } from '@/types';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { ClaudeSearchBrief, PartnerPreferences } from '@/types';
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+function getModel() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+  const genAI = new GoogleGenerativeAI(apiKey);
+  return genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+}
 
 const TMDB_GENRES = `
 Action: 28, Adventure: 12, Animation: 16, Comedy: 35, Crime: 80,
@@ -16,8 +21,33 @@ function formatPrefs(prefs: PartnerPreferences, label: string): string {
 - Description: "${prefs.moodDescription || 'none'}"
 - Languages: ${prefs.languages.join(', ')}
 - Content: ${prefs.contentType === 'movies_only' ? 'Movies only' : 'Movies and TV series'}
-- Min IMDb/rating: ${prefs.minImdb}+
+- Min rating: ${prefs.minImdb}+
 - Eras: ${prefs.eras.join(', ')}`;
+}
+
+function fallbackBrief(prefsA: PartnerPreferences, prefsB: PartnerPreferences): ClaudeSearchBrief {
+  return {
+    genre_ids: [18, 35, 28],
+    sort_by: 'popularity.desc',
+    languages: [],
+    min_vote_average: Math.min(prefsA.minImdb, prefsB.minImdb),
+    include_adult: false,
+    include_series:
+      prefsA.contentType === 'include_series' || prefsB.contentType === 'include_series',
+    notes: 'Fallback selection',
+  };
+}
+
+async function callGemini(prompt: string): Promise<string> {
+  const model = getModel();
+  const result = await model.generateContent(prompt);
+  return result.response.text().trim();
+}
+
+function extractJson(text: string): ClaudeSearchBrief {
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON in response');
+  return JSON.parse(match[0]) as ClaudeSearchBrief;
 }
 
 export async function generateSearchBrief(
@@ -32,47 +62,28 @@ ${formatPrefs(prefsB, 'Partner B')}
 
 TMDB genre IDs: ${TMDB_GENRES}
 
-Return ONLY a JSON object (no markdown, no explanation) with these fields:
+Return ONLY a JSON object (no markdown fences, no explanation) with these exact fields:
 {
-  "genre_ids": [array of TMDB genre IDs that work for BOTH partners - up to 4, use OR logic],
+  "genre_ids": [array of up to 4 TMDB genre IDs satisfying BOTH partners],
   "sort_by": "popularity.desc" or "vote_average.desc",
-  "languages": [array of ISO language codes, e.g. ["hi","en"] - omit if no strong preference],
-  "min_vote_average": number (6.0-8.5),
+  "languages": [ISO-639-1 codes e.g. ["hi","en"] — empty array means no filter],
+  "min_vote_average": number between 6.0 and 8.5,
   "include_adult": false,
-  "include_series": boolean (true if either partner wants series),
-  "notes": "one sentence on your reasoning"
+  "include_series": boolean,
+  "notes": "one sentence on reasoning"
 }
 
 Rules:
-- Prefer genres that satisfy both partners
-- If moods conflict (e.g. scary vs romantic), find a middle ground (thriller, drama)
-- Languages: include all languages both partners mentioned; empty array means no filter
-- Be generous with genre selection - it's better to have more options
-- If descriptions mention specific themes (heist, time travel, etc.), use relevant genres`;
-
-  const message = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 512,
-    messages: [{ role: 'user', content: prompt }],
-  });
-
-  const text = (message.content[0] as { type: string; text: string }).text.trim();
+- If moods conflict, find middle ground (e.g. intense+romantic → thriller/drama)
+- Be generous with genres — OR logic gives more results
+- If descriptions mention themes (heist, time travel etc.), pick relevant genres`;
 
   try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No JSON found');
-    return JSON.parse(jsonMatch[0]) as ClaudeSearchBrief;
-  } catch {
-    // Fallback: extract common genres
-    return {
-      genre_ids: [18, 35, 28], // Drama, Comedy, Action
-      sort_by: 'popularity.desc',
-      languages: [],
-      min_vote_average: prefsA.minImdb > prefsB.minImdb ? prefsB.minImdb : prefsA.minImdb,
-      include_adult: false,
-      include_series: prefsA.contentType === 'include_series' || prefsB.contentType === 'include_series',
-      notes: 'Fallback selection',
-    };
+    const text = await callGemini(prompt);
+    return extractJson(text);
+  } catch (err) {
+    console.error('Gemini search brief error:', err);
+    return fallbackBrief(prefsA, prefsB);
   }
 }
 
@@ -83,47 +94,37 @@ export async function generateRound2Brief(
   likesB: { tmdb_id: number; title: string; genres: string[] }[],
   seenIds: number[]
 ): Promise<ClaudeSearchBrief> {
-  const formatLikes = (likes: typeof likesA) =>
+  const fmt = (likes: typeof likesA) =>
     likes.map((t) => `"${t.title}" (${t.genres.join(', ')})`).join(', ') || 'none';
 
-  const prompt = `Round 1 of swiping ended with no match. Help these two find something for round 2.
+  const prompt = `Round 1 swiping ended with no match. Help find better titles for round 2.
 
 ${formatPrefs(prefsA, 'Partner A')}
-Partner A liked: ${formatLikes(likesA)}
+Partner A liked: ${fmt(likesA)}
 
 ${formatPrefs(prefsB, 'Partner B')}
-Partner B liked: ${formatLikes(likesB)}
+Partner B liked: ${fmt(likesB)}
 
-Already seen TMDB IDs (exclude): ${seenIds.join(', ')}
+Already seen TMDB IDs (exclude these): ${seenIds.slice(0, 50).join(', ')}
 
 TMDB genre IDs: ${TMDB_GENRES}
 
-Analyse what both partners actually responded to (their likes), find the overlap, and return a JSON search brief:
+Analyse the overlap in their actual likes. Return ONLY a JSON object:
 {
-  "genre_ids": [genre IDs based on overlap in their actual likes],
+  "genre_ids": [genre IDs from overlap in their swipe history],
   "sort_by": "vote_average.desc",
   "languages": [ISO codes],
   "min_vote_average": number,
   "include_adult": false,
   "include_series": boolean,
-  "notes": "what you noticed from their swipes"
-}
-
-Return ONLY the JSON object.`;
-
-  const message = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 512,
-    messages: [{ role: 'user', content: prompt }],
-  });
-
-  const text = (message.content[0] as { type: string; text: string }).text.trim();
+  "notes": "what you noticed from swipe patterns"
+}`;
 
   try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No JSON found');
-    return JSON.parse(jsonMatch[0]) as ClaudeSearchBrief;
-  } catch {
+    const text = await callGemini(prompt);
+    return extractJson(text);
+  } catch (err) {
+    console.error('Gemini round-2 brief error:', err);
     return {
       genre_ids: [18, 53, 9648],
       sort_by: 'vote_average.desc',

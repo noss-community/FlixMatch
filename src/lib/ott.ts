@@ -1,18 +1,34 @@
 import { OttPlatform, OTT_DISPLAY_NAMES, OTT_COLORS } from '@/types';
 
-const RAPIDAPI_HOST = 'streaming-availability.p.rapidapi.com';
-const RAPIDAPI_BASE = `https://${RAPIDAPI_HOST}`;
+const TMDB_BASE = 'https://api.themoviedb.org/3';
 
-interface StreamingService {
-  service: string;
-  streamingType: string;
-  link: string;
+function tmdbHeaders() {
+  return { Authorization: `Bearer ${process.env.TMDB_READ_ACCESS_TOKEN}` };
 }
 
-interface StreamingAvailabilityResponse {
-  streamingInfo?: {
-    in?: StreamingService[];
-    IN?: StreamingService[];
+async function getImdbId(tmdbId: number, mediaType: 'movie' | 'tv'): Promise<string | null> {
+  try {
+    const endpoint = mediaType === 'movie'
+      ? `/movie/${tmdbId}/external_ids`
+      : `/tv/${tmdbId}/external_ids`;
+    const res = await fetch(`${TMDB_BASE}${endpoint}`, {
+      headers: tmdbHeaders(),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.imdb_id || null;
+  } catch {
+    return null;
+  }
+}
+
+interface OttDetailsResponse {
+  status: boolean;
+  results?: {
+    imdb_id?: string;
+    title?: string;
+    streamingAvailability?: Record<string, Record<string, { link?: string; quality?: string; type?: string }>>;
   };
 }
 
@@ -21,54 +37,66 @@ export async function getIndianOttPlatforms(
   mediaType: 'movie' | 'tv'
 ): Promise<OttPlatform[]> {
   const apiKey = process.env.RAPIDAPI_KEY;
-  if (!apiKey) return getSearchFallbacks(tmdbId, mediaType);
+  const apiHost = process.env.RAPIDAPI_HOST || 'ott-details.p.rapidapi.com';
 
-  const type = mediaType === 'movie' ? 'movie' : 'series';
+  if (!apiKey) return [];
+
+  // Get IMDb ID from TMDB (OTT Details API uses IMDb IDs)
+  const imdbId = await getImdbId(tmdbId, mediaType);
+  if (!imdbId) return [];
 
   try {
-    const url = `${RAPIDAPI_BASE}/shows/${type}/${tmdbId}?country=in&output_language=en`;
+    const url = `https://${apiHost}/giveOTTdetails?imdb_id=${imdbId}`;
     const res = await fetch(url, {
       headers: {
-        'x-rapidapi-host': RAPIDAPI_HOST,
+        'x-rapidapi-host': apiHost,
         'x-rapidapi-key': apiKey,
       },
       signal: AbortSignal.timeout(8000),
     });
 
-    if (!res.ok) return getSearchFallbacks(tmdbId, mediaType);
+    if (!res.ok) return [];
 
-    const data: StreamingAvailabilityResponse = await res.json();
-    const services = data.streamingInfo?.in || data.streamingInfo?.IN || [];
+    const data: OttDetailsResponse = await res.json();
+    if (!data.status || !data.results?.streamingAvailability) return [];
 
-    const platforms: OttPlatform[] = services
-      .filter((s) => s.streamingType !== 'buy' && s.streamingType !== 'rent')
-      .map((s) => {
-        const serviceKey = s.service.toLowerCase();
+    const availability = data.results.streamingAvailability;
+
+    // Check India keys: "IN", "India", "india"
+    const indiaData =
+      availability['IN'] ||
+      availability['India'] ||
+      availability['india'] ||
+      null;
+
+    if (!indiaData) return [];
+
+    const platforms: OttPlatform[] = Object.entries(indiaData)
+      .filter(([, info]) => info && (info.link || info.type !== 'buy'))
+      .map(([serviceName, info]) => {
+        const key = serviceName.toLowerCase().replace(/\s+/g, '');
+        const matchedKey = Object.keys(OTT_DISPLAY_NAMES).find(
+          (k) => key.includes(k) || k.includes(key)
+        ) || key;
         return {
-          service: serviceKey,
-          displayName: OTT_DISPLAY_NAMES[serviceKey] || s.service,
-          streamingType: s.streamingType,
-          link: s.link,
+          service: matchedKey,
+          displayName: OTT_DISPLAY_NAMES[matchedKey] || serviceName,
+          streamingType: info.type || 'subscription',
+          link: info.link || `https://www.google.com/search?q=${encodeURIComponent(serviceName + ' watch online India')}`,
         };
       });
 
-    // Deduplicate by service
+    // Deduplicate
     const seen = new Set<string>();
-    const unique = platforms.filter((p) => {
+    return platforms.filter((p) => {
       if (seen.has(p.service)) return false;
       seen.add(p.service);
       return true;
     });
-
-    return unique.length > 0 ? unique : getSearchFallbacks(tmdbId, mediaType);
-  } catch {
-    return getSearchFallbacks(tmdbId, mediaType);
+  } catch (err) {
+    console.error('OTT Details API error:', err);
+    return [];
   }
-}
-
-function getSearchFallbacks(tmdbId: number, _mediaType: 'movie' | 'tv'): OttPlatform[] {
-  // Return empty array — UI will show "Check availability" message
-  return [];
 }
 
 export { OTT_COLORS };
