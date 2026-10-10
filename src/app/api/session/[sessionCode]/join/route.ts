@@ -33,14 +33,21 @@ export async function POST(
 
   const partnerBId = uuidv4();
 
-  const { error: updateErr } = await db
+  const { data: updated, error: updateErr } = await db
     .from('sessions')
     .update({ partner_b_id: partnerBId })
     .eq('session_code', sessionCode)
-    .is('partner_b_id', null); // Atomic: only update if still null
+    .is('partner_b_id', null) // Atomic: only update if still null
+    .select('partner_b_id');
 
   if (updateErr) {
-    return NextResponse.json({ error: 'Could not join session' }, { status: 500 });
+    console.error('Join update error:', updateErr);
+    return NextResponse.json({ error: 'Could not join session', detail: updateErr.message }, { status: 500 });
+  }
+
+  if (!updated || updated.length === 0) {
+    // 0 rows updated — race condition (another client just joined) or RLS block
+    return NextResponse.json({ error: 'Session already has two partners' }, { status: 409 });
   }
 
   return NextResponse.json({ partnerId: partnerBId, partner: 'B' });
