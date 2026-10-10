@@ -6,7 +6,13 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { sessionCode: string } }
 ) {
-  const db = supabaseAdmin();
+  let db;
+  try {
+    db = supabaseAdmin();
+  } catch (e) {
+    console.error('Supabase config error:', e);
+    return NextResponse.json({ error: 'Server misconfiguration.' }, { status: 503 });
+  }
   const { sessionCode } = params;
 
   const { data: session } = await db

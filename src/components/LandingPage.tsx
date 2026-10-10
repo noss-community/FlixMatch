@@ -7,15 +7,23 @@ import { savePartnerId } from '@/lib/utils';
 export default function LandingPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [createError, setCreateError] = useState('');
 
   const handleStart = async () => {
     setLoading(true);
+    setCreateError('');
     try {
       const res = await fetch('/api/session/create', { method: 'POST' });
       const data = await res.json();
+      if (!res.ok || !data.sessionCode) {
+        setCreateError(data.error || 'Could not create session. Please try again.');
+        setLoading(false);
+        return;
+      }
       savePartnerId(data.sessionCode, data.partnerId);
       router.push(`/session/${data.sessionCode}`);
     } catch {
+      setCreateError('Network error. Please check your connection and try again.');
       setLoading(false);
     }
   };
@@ -78,6 +86,12 @@ export default function LandingPage() {
           'Start Matching'
         )}
       </button>
+
+      {createError && (
+        <p className="mt-3 text-red-400 text-sm text-center max-w-xs animate-fade-in">
+          {createError}
+        </p>
+      )}
 
       <p className="mt-4 text-fm-dim text-xs text-center animate-fade-in" style={{ animationDelay: '0.3s' }}>
         No sign-up needed · Share a QR code · Works on any phone

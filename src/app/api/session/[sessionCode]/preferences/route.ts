@@ -7,7 +7,13 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { sessionCode: string } }
 ) {
-  const db = supabaseAdmin();
+  let db;
+  try {
+    db = supabaseAdmin();
+  } catch (e) {
+    console.error('Supabase config error:', e);
+    return NextResponse.json({ error: 'Server misconfiguration.' }, { status: 503 });
+  }
   const { sessionCode } = params;
   const body = await req.json();
   const { partnerId, preferences }: { partnerId: string; preferences: PartnerPreferences } = body;

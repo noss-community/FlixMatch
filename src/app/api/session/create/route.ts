@@ -5,7 +5,13 @@ import { generateSessionCode } from '@/lib/utils';
 import { v4 as uuidv4 } from 'uuid';
 
 export async function POST(_req: NextRequest) {
-  const db = supabaseAdmin();
+  let db;
+  try {
+    db = supabaseAdmin();
+  } catch (e) {
+    console.error('Supabase config error:', e);
+    return NextResponse.json({ error: 'Server misconfiguration — database not available.' }, { status: 503 });
+  }
   const partnerAId = uuidv4();
 
   let sessionCode = '';
