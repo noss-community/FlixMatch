@@ -65,9 +65,13 @@ export default function SessionPage() {
       const partnerSubmitted = pt === 'A' ? sess.partner_b_submitted : sess.partner_a_submitted;
       const partnerJoined = !!sess.partner_b_id;
 
+      // hasSubmittedRef guards against stale DB reads reverting the UI
+      // back to the form immediately after submission.
+      const alreadySubmittedLocally = hasSubmittedRef.current;
+
       switch (sess.status) {
         case 'waiting':
-          if (!mySubmitted) {
+          if (!mySubmitted && !alreadySubmittedLocally) {
             setUiState('preference_form');
           } else if (pt === 'A' && !partnerJoined) {
             setUiState('waiting_for_partner_join');
@@ -77,7 +81,7 @@ export default function SessionPage() {
           break;
 
         case 'both_submitted':
-          if (!mySubmitted) {
+          if (!mySubmitted && !alreadySubmittedLocally) {
             setUiState('preference_form');
           } else {
             setUiState('generating_pool');
