@@ -1,9 +1,17 @@
--- FlixMatch — full setup (safe to re-run)
+-- FlixMatch — full setup (drop & recreate)
 -- Run this in the Supabase SQL Editor.
+
+-- ── Drop existing tables (reverse FK order) ───────────────────────────────────
+
+DROP TABLE IF EXISTS matches CASCADE;
+DROP TABLE IF EXISTS swipes CASCADE;
+DROP TABLE IF EXISTS title_pool CASCADE;
+DROP TABLE IF EXISTS partner_preferences CASCADE;
+DROP TABLE IF EXISTS sessions CASCADE;
 
 -- ── Tables ────────────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS sessions (
+CREATE TABLE sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_code VARCHAR(8) UNIQUE NOT NULL,
   partner_a_id UUID NOT NULL,
@@ -18,7 +26,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS partner_preferences (
+CREATE TABLE partner_preferences (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
   partner CHAR(1) NOT NULL CHECK (partner IN ('A', 'B')),
@@ -32,7 +40,7 @@ CREATE TABLE IF NOT EXISTS partner_preferences (
   UNIQUE(session_id, partner)
 );
 
-CREATE TABLE IF NOT EXISTS title_pool (
+CREATE TABLE title_pool (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
   round INTEGER NOT NULL,
@@ -54,7 +62,7 @@ CREATE TABLE IF NOT EXISTS title_pool (
   UNIQUE(session_id, round, tmdb_id)
 );
 
-CREATE TABLE IF NOT EXISTS swipes (
+CREATE TABLE swipes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
   partner CHAR(1) NOT NULL CHECK (partner IN ('A', 'B')),
@@ -66,7 +74,7 @@ CREATE TABLE IF NOT EXISTS swipes (
   UNIQUE(session_id, partner, tmdb_id, round)
 );
 
-CREATE TABLE IF NOT EXISTS matches (
+CREATE TABLE matches (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
   tmdb_id INTEGER NOT NULL,
@@ -80,10 +88,10 @@ CREATE TABLE IF NOT EXISTS matches (
 
 -- ── Indexes ───────────────────────────────────────────────────────────────────
 
-CREATE INDEX IF NOT EXISTS idx_sessions_code ON sessions(session_code);
-CREATE INDEX IF NOT EXISTS idx_swipes_session_partner ON swipes(session_id, partner, round);
-CREATE INDEX IF NOT EXISTS idx_title_pool_session_round ON title_pool(session_id, round);
-CREATE INDEX IF NOT EXISTS idx_matches_session ON matches(session_id);
+CREATE INDEX idx_sessions_code ON sessions(session_code);
+CREATE INDEX idx_swipes_session_partner ON swipes(session_id, partner, round);
+CREATE INDEX idx_title_pool_session_round ON title_pool(session_id, round);
+CREATE INDEX idx_matches_session ON matches(session_id);
 
 -- ── updated_at trigger ────────────────────────────────────────────────────────
 
