@@ -19,6 +19,8 @@ export async function POST(_req: NextRequest) {
   let created = false;
 
   // Retry on collision (extremely rare)
+  let lastError: { message?: string; code?: string; details?: string; hint?: string } | null = null;
+
   while (attempts < 5) {
     const code = generateSessionCode();
     const { error } = await db.from('sessions').insert({
@@ -32,11 +34,19 @@ export async function POST(_req: NextRequest) {
       created = true;
       break;
     }
+    lastError = { message: error.message, code: error.code, details: error.details, hint: error.hint };
+    console.error('Supabase INSERT error (attempt', attempts + 1, '):', lastError);
     attempts++;
   }
 
   if (!created) {
-    return NextResponse.json({ error: 'Failed to create session' }, { status: 500 });
+    return NextResponse.json({
+      error: 'Failed to create session',
+      supabaseError: lastError?.message,
+      supabaseCode: lastError?.code,
+      supabaseDetails: lastError?.details,
+      supabaseHint: lastError?.hint,
+    }, { status: 500 });
   }
 
   return NextResponse.json({ sessionCode, partnerId: partnerAId });
